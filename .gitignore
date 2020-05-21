@@ -4,6 +4,7 @@
 *.dll
 *.so
 *.dylib
+notification-migrator
 
 # Test binary, built with `go test -c`
 *.test
