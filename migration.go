@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/pkg/errors"
@@ -255,7 +256,17 @@ func migrateNotifications(sourceTx, destTx *sql.Tx) error {
 	base := sq.StatementBuilder.
 		PlaceholderFormat(sq.Dollar).
 		Insert("notifications").
-		Columns("id", "notification_type_id", "user_id", "subject", "seen", "deleted", "time_created", "message")
+		Columns(
+			"id",
+			"notification_type_id",
+			"user_id",
+			"subject",
+			"seen",
+			"deleted",
+			"time_created",
+			"incoming_json",
+			"outgoing_json",
+		)
 
 	// insert each notification into the destination database. This is done one at a time to avoid argument limits.
 	for sourceRows.Next() {
@@ -269,8 +280,30 @@ func migrateNotifications(sourceTx, destTx *sql.Tx) error {
 		notificationTypeID := notificationTypeIDFor[notificationType]
 		userID := userIDFor[username]
 
+		// Create an outgoing version of the message that includes the notification ID.
+		var outgoing map[string]interface{}
+		err = json.Unmarshal([]byte(message), &outgoing)
+		if err != nil {
+			return errors.Wrap(err, wrapMsg)
+		}
+		outgoing["message"].(map[string]interface{})["id"] = id
+		outgoingJSON, err := json.Marshal(outgoing)
+		if err != nil {
+			return errors.Wrap(err, wrapMsg)
+		}
+
 		// Generate the insertion statement and arguments for this notification.
-		builder := base.Values(id, notificationTypeID, userID, subject, seen, deleted, timeCreated, message)
+		builder := base.Values(
+			id,
+			notificationTypeID,
+			userID,
+			subject,
+			seen,
+			deleted,
+			timeCreated,
+			message,
+			outgoingJSON,
+		)
 		query, args, err := builder.ToSql()
 		if err != nil {
 			return errors.Wrap(err, wrapMsg)
@@ -291,18 +324,21 @@ func runMigration(sourceTx, destTx *sql.Tx) error {
 	wrapMsg := "database migration failed"
 
 	// Migrate the users from the source database to the destination database.
+	fmt.Println("Migrating users...")
 	err := migrateUsers(sourceTx, destTx)
 	if err != nil {
 		return errors.Wrap(err, wrapMsg)
 	}
 
 	// Migrate the notification types from the source database to the destnation database.
+	fmt.Println("Migrating notification types...")
 	err = migrateNotificationTypes(sourceTx, destTx)
 	if err != nil {
 		return errors.Wrap(err, wrapMsg)
 	}
 
 	// Migrate the notifications from the source database to the destination database.
+	fmt.Println("Migrating notifications...")
 	err = migrateNotifications(sourceTx, destTx)
 	if err != nil {
 		return errors.Wrap(err, wrapMsg)
